@@ -12,7 +12,6 @@
 # limitations under the License.
 
 import logging
-import tempfile
 
 from clusterdock.models import Cluster, Node
 
@@ -47,10 +46,7 @@ def main(args):
     node_image = '{}/{}/clusterdock:greenplum{}'.format(args.registry,
                                                         args.namespace or DEFAULT_NAMESPACE,
                                                         args.greenplum_version)
-
-    temp_dir_name = tempfile.mkdtemp()
-    logger.debug('Created temporary directory %s', temp_dir_name)
-    volumes = [{'/sys/fs/cgroup': '/sys/fs/cgroup'}, {temp_dir_name: '/run'}]
+    volumes = [{'/sys/fs/cgroup': '/sys/fs/cgroup'}, {'/run': '/run/lock'}]
 
     if args.predictable:
         ports = [{GREENPLUM_SQL_CLIENT_CONNECTION_PORT: GREENPLUM_SQL_CLIENT_CONNECTION_PORT},
@@ -85,21 +81,26 @@ def main(args):
 
     commands = ['source /usr/local/greenplum-db/greenplum_path.sh',
                 'chmod 755 /home/gpadmin/prepare.sh',
+                # Create segment hosts with 1 primary segment in each segment host.
                 '/home/gpadmin/prepare.sh -s {} -n 1'.format(len(args.secondary_nodes)),
+                # Initialize Greenplum Database system using  gpinitsystem_config file.
                 'gpinitsystem -a -c /home/gpadmin/gpinitsystem_config']
     primary_node.execute(' && '.join(commands), user='gpadmin')
 
     commands = ['source /usr/local/greenplum-db/greenplum_path.sh',
+                # To allow access to Greenplum Database from every host, change pg_hba.conf file.
                 "echo 'host all all 0.0.0.0/0 trust' >> /home/gpadmin/master/gpseg-1/pg_hba.conf",
                 'export MASTER_DATA_DIRECTORY=/home/gpadmin/master/gpseg-1',
+                # Following will make sure the changes in pg_hba.conf take effect.
                 '/usr/local/greenplum-db/bin/gpstop -u',
                 'sudo ln -s /usr/local/greenplum-db-5.12.0/lib/libpq.so.5 /usr/lib64/libpq.so.5',
                 'sudo ln -s /usr/local/greenplum-db-5.12.0/lib/libssl.so.1.0.0 /usr/lib64/libssl.so.1.0.0',
                 'sudo ln -s /usr/local/greenplum-db-5.12.0/lib/libcrypto.so.1.0.0 /usr/lib64/libcrypto.so.1.0.0',
                 'sudo ln -s /usr/local/greenplum-db-5.12.0/lib/libcom_err.so.3 /usr/lib64/libcom_err.so.3',
+                # Create db and extension in it.
                 '/usr/local/greenplum-db/bin/createdb some_db',
                 "/usr/local/greenplum-db/bin/psql -d some_db -c 'CREATE EXTENSION  gpss;'"]
     primary_node.execute(' && '.join(commands), user='gpadmin')
 
-    # Start gpss in detached mode since gpss waits indefinitely for client job requests.
+    # Start Greenplum Stream Server in detached mode since it waits indefinitely for client job requests.
     primary_node.execute('/usr/local/greenplum-db/bin/gpss /home/gpadmin/config.json', user='gpadmin', detach=True)
