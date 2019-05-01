@@ -46,8 +46,6 @@ def main(args):
     node_image = '{}/{}/clusterdock:greenplum{}'.format(args.registry,
                                                         args.namespace or DEFAULT_NAMESPACE,
                                                         args.greenplum_version)
-    volumes = [{'/sys/fs/cgroup': '/sys/fs/cgroup'}, {'/run': '/run/lock'}]
-
     if args.predictable:
         ports = [{GREENPLUM_SQL_CLIENT_CONNECTION_PORT: GREENPLUM_SQL_CLIENT_CONNECTION_PORT},
                  {GREENPLUM_SSH_HOST_PORT: GREENPLUM_SSH_CONTAINER_PORT},
@@ -62,16 +60,19 @@ def main(args):
                         group='primary',
                         image=node_image,
                         name='greenplum_{}'.format(args.greenplum_version),
-                        ports=ports,
-                        volumes=volumes)
+                        ports=ports)
 
     secondary_nodes = [Node(hostname=hostname,
                             group='secondary',
-                            image=node_image,
-                            volumes=volumes)
+                            image=node_image)
                        for hostname in args.secondary_nodes]
 
     nodes = [primary_node] + secondary_nodes
+    for node in nodes:
+        node.volumes.append({'/sys/fs/cgroup': '/sys/fs/cgroup'})
+        # do not use tempfile.mkdtemp, as systemd wont be able to bring services up when temp ends to be created in
+        # /var/tmp/ directory
+        node.volumes.append(['/run', '/run/lock'])
     cluster = Cluster(*nodes)
     cluster.primary_node = primary_node
     cluster.start(args.network, pull_images=args.always_pull)
